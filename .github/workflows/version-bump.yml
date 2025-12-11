@@ -17,13 +17,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repo (full history)
+      # Step 1: Checkout repository using PAT
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0  # needed to compute diffs
 
-      # Step 2: Process folders
+      # Step 2: Process folders and bump versions
       - name: Detect .car changes and bump versions
         run: |
           folders=("LMS" "CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities")
@@ -74,10 +75,23 @@ jobs:
             new_version="${major}.${minor}.${patch}"
             echo "Updated version for $folder: $new_version"
 
-            # Update version.yaml locally
+            # Update version.yaml
             echo "version: $new_version" > "$version_file"
+
+            git add "$version_file"
           done
 
-          echo ""
-          echo "Version bump process complete. All updated versions are reflected in workflow logs."
+      # Step 3: Commit & push updated version files using PAT
+      - name: Commit & Push version updates
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          if git diff --cached --quiet; then
+            echo "No version changes to commit. Exiting."
+            exit 0
+          fi
+
+          git commit -m "Auto version bump for updated .car files"
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
 
