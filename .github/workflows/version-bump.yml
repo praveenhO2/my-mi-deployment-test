@@ -99,5 +99,5 @@ jobs:
           git commit -m "Auto version bump for updated .car files"
 
           echo "Pushing changes..."
-          git push origin main
+          git push https://x-access-token:${{ secrets.GH_PATH }}@github.com/${{ github.repository }}.git HEAD:main
 
