@@ -1,50 +1,44 @@
-name: Version Bump
+name: Version Bump for .car files
 
 on:
   push:
     paths:
-      - "CRM/*.car"
-      - "ERS/*.car"
-      - "Enterprise-Services/*.car"
-      - "HR-Finance/*.car"
-      - "Membership/*.car"
-      - "Travel/*.car"
-      - "Utilities/*.car"
-      - "LMS/*.car"
+      - 'LMS/*.car'
+      - 'CRM/*.car'
+      - 'ERS/*.car'
+      - 'Enterprise-Services/*.car'
+      - 'HR-Finance/*.car'
+      - 'Membership/*.car'
+      - 'Travel/*.car'
+      - 'Utilities/*.car'
 
 jobs:
-  bump_versions:
+  bump-version:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # Step 1: Checkout repo (full history)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Full history needed for diff
+          fetch-depth: 0
 
-      - name: Setup git
+      # Step 2: Process folders
+      - name: Detect .car changes and bump versions
         run: |
-          git config --global user.email "github-actions@github.com"
-          git config --global user.name "github-actions"
-
-      - name: Version bump for all folders
-        run: |
-          # Fetch last two commits to safely compare changes
-          git fetch origin main --depth=2
-
-          folders=("CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities" "LMS")
+          folders=("LMS" "CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities")
 
           echo "Checking which folders have .car changes..."
 
           for folder in "${folders[@]}"; do
+            version_file="$folder/version.yaml"
+
             echo ""
             echo "---------------------------------------"
             echo "Processing folder: $folder"
             echo "---------------------------------------"
 
-            version_file="$folder/version.yaml"
-
-            # Detect .car changes in this folder
+            # Detect .car changes since previous commit
             changed_files=$(git diff --name-only HEAD^ HEAD -- "$folder"/*.car || true)
 
             if [ -z "$changed_files" ]; then
@@ -52,52 +46,38 @@ jobs:
               continue
             fi
 
-            echo "Changed .car files detected:"
+            echo "Detected changed .car files:"
             echo "$changed_files"
 
-            # Create version.yaml if missing
+            # Ensure version.yaml exists
             if [ ! -f "$version_file" ]; then
               echo "version: 1.0.0" > "$version_file"
-              echo "Created version.yaml for $folder"
+              echo "Created new version file for $folder with version 1.0.0"
             fi
 
             # Read current version
             current_version=$(grep 'version:' "$version_file" | awk '{print $2}')
             echo "Current version for $folder: $current_version"
 
-            # Split version into major.minor.patch
+            # Split version
             major=$(echo "$current_version" | cut -d. -f1)
             minor=$(echo "$current_version" | cut -d. -f2)
             patch=$(echo "$current_version" | cut -d. -f3)
 
-            # Increment patch
+            # Increment version: patch first, rollover to minor
             patch=$((patch + 1))
-
-            # Roll over patch > 99 → increment minor
             if [ "$patch" -gt 99 ]; then
               patch=0
               minor=$((minor + 1))
             fi
 
             new_version="${major}.${minor}.${patch}"
+            echo "Updated version for $folder: $new_version"
 
-            echo "Updating version to: $new_version"
+            # Update version.yaml locally
             echo "version: $new_version" > "$version_file"
-
-            git add "$version_file"
           done
 
           echo ""
-          echo "Checking if any version files changed..."
-
-          if git diff --cached --quiet; then
-            echo "No version changes to commit. Exiting."
-            exit 0
-          fi
-
-          echo "Committing version updates..."
-          git commit -m "Auto version bump for updated .car files"
-
-          echo "Pushing changes..."
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
+          echo "Version bump process complete. All updated versions are reflected in workflow logs."
 
