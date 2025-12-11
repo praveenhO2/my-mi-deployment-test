@@ -1,56 +1,77 @@
-name: LMS Version Bump
+name: Multi-Folder Version Bump
 
 on:
   push:
     paths:
-      - 'LMS/*.car'
+      - 'CRM/*.car'
+      - 'ERS/*.car'
+      - 'Enterprise-Services/*.car'
+      - 'HR-Finance/*.car'
+      - 'Membership/*.car'
+      - 'Travel/*.car'
+      - 'Utilities/*.car'
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
 
     steps:
-
-      # Step 1: Checkout the repo using your PAT
+      # Step 1: Checkout the repo using PAT
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GH_PATH }}
 
-      # Step 2: Read current version
-      - name: Read current version
-        id: read_version
+      # Step 2: Loop over all folders and bump versions
+      - name: Bump versions
         run: |
-          if [ ! -f LMS/version.yaml ]; then
-            echo "version: 1.0.0" > LMS/version.yaml
-          fi
-          VERSION=$(grep 'version:' LMS/version.yaml | awk '{print $2}')
-          echo "current_version=$VERSION" >> $GITHUB_ENV
+          folders=("CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities")
 
-      # Step 3: Bump version (PATCH first, minor/major rollover)
-      - name: Bump version
-        id: bump
-        run: |
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$current_version"
-          PATCH=$((PATCH + 1))
-          if [ $PATCH -gt 99 ]; then
-            PATCH=0
-            MINOR=$((MINOR + 1))
-            if [ $MINOR -gt 99 ]; then
-              MINOR=0
-              MAJOR=$((MAJOR + 1))
+          for FOLDER in "${folders[@]}"; do
+            # Get all .car files changed in this folder
+            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep "^$FOLDER/.*\.car" || true)
+
+            if [ -n "$CHANGED_FILES" ]; then
+              echo "Detected changes in $FOLDER:"
+              echo "$CHANGED_FILES"
+
+              FILE="$FOLDER/version.yaml"
+
+              # Initialize version.yaml if it doesn't exist
+              if [ ! -f "$FILE" ]; then
+                echo "version: 1.0.0" > "$FILE"
+              fi
+
+              # Read current version
+              VERSION=$(grep 'version:' "$FILE" | awk '{print $2}')
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+              # Bump patch, minor, major
+              PATCH=$((PATCH+1))
+              if [ $PATCH -gt 99 ]; then
+                PATCH=0
+                MINOR=$((MINOR+1))
+                if [ $MINOR -gt 99 ]; then
+                  MINOR=0
+                  MAJOR=$((MAJOR+1))
+                fi
+              fi
+
+              NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+              echo "version: $NEW_VERSION" > "$FILE"
+
+              echo "Updated $FOLDER version to $NEW_VERSION"
+            else
+              echo "No .car changes detected in $FOLDER. Skipping version bump."
             fi
-          fi
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          echo "version: $NEW_VERSION" > LMS/version.yaml
-          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+          done
 
-      # Step 4: Commit & Push updated version.yaml using PAT
-      - name: Commit & Push new version
-        run: |
+          # Step 3: Commit all version.yaml changes
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add LMS/version.yaml
-          git commit -m "Auto bump LMS version to $new_version"
+          git add */version.yaml
+          git commit -m "Auto bump versions for folders with .car changes" || echo "No version.yaml changes to commit"
+
+          # Step 4: Push using PAT
           git push https://x-access-token:${{ secrets.GH_PATH }}@github.com/${{ github.repository }}.git HEAD:main
         continue-on-error: true
