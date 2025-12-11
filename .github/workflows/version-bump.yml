@@ -1,9 +1,8 @@
-name: Version Bump for .car files
+name: Multi-Folder Version Bump
 
 on:
   push:
     paths:
-      - 'LMS/*.car'
       - 'CRM/*.car'
       - 'ERS/*.car'
       - 'Enterprise-Services/*.car'
@@ -11,37 +10,35 @@ on:
       - 'Membership/*.car'
       - 'Travel/*.car'
       - 'Utilities/*.car'
+      - 'LMS/*.car'
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repository using PAT
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # Step 1: Checkout repo using PAT
+      - name: Checkout repo
+        uses: actions/checkout@v3
         with:
           token: ${{ secrets.GH_PAT }}
-          fetch-depth: 0  # needed to compute diffs
 
-      # Step 2: Process folders and bump versions
-      - name: Detect .car changes and bump versions
+      # Step 2: Detect changes and bump versions
+      - name: Bump versions
         run: |
-          folders=("LMS" "CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities")
+          folders=("CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities" "LMS")
 
           echo "Checking which folders have .car changes..."
 
           for folder in "${folders[@]}"; do
             version_file="$folder/version.yaml"
-
             echo ""
             echo "---------------------------------------"
             echo "Processing folder: $folder"
             echo "---------------------------------------"
 
-            # Detect .car changes since previous commit
-            changed_files=$(git diff --name-only HEAD^ HEAD -- "$folder"/*.car || true)
-
+            # Detect .car changes
+            changed_files=$(git diff --name-only origin/main HEAD -- "$folder"/*.car || true)
             if [ -z "$changed_files" ]; then
               echo "No .car changes detected in $folder. Skipping."
               continue
@@ -50,7 +47,7 @@ jobs:
             echo "Detected changed .car files:"
             echo "$changed_files"
 
-            # Ensure version.yaml exists
+            # Create version.yaml if missing
             if [ ! -f "$version_file" ]; then
               echo "version: 1.0.0" > "$version_file"
               echo "Created new version file for $folder with version 1.0.0"
@@ -60,38 +57,33 @@ jobs:
             current_version=$(grep 'version:' "$version_file" | awk '{print $2}')
             echo "Current version for $folder: $current_version"
 
-            # Split version
+            # Step 2a: Commit pre-bump folder state
+            git add "$folder"/*
+            git commit -m "$folder version: $current_version" || echo "Nothing to commit for pre-bump"
+
+            # Step 2b: Split version and increment patch
             major=$(echo "$current_version" | cut -d. -f1)
             minor=$(echo "$current_version" | cut -d. -f2)
             patch=$(echo "$current_version" | cut -d. -f3)
 
-            # Increment version: patch first, rollover to minor
             patch=$((patch + 1))
             if [ "$patch" -gt 99 ]; then
               patch=0
               minor=$((minor + 1))
             fi
-
             new_version="${major}.${minor}.${patch}"
-            echo "Updated version for $folder: $new_version"
 
-            # Update version.yaml
+            echo "Updating version to: $new_version"
             echo "version: $new_version" > "$version_file"
 
+            # Step 2c: Commit version bump
             git add "$version_file"
+            git commit -m "$folder version: $new_version" || echo "Nothing to commit for version bump"
           done
 
-      # Step 3: Commit & push updated version files using PAT
-      - name: Commit & Push version updates
-        run: |
+          echo ""
+          echo "Pushing all commits..."
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          if git diff --cached --quiet; then
-            echo "No version changes to commit. Exiting."
-            exit 0
-          fi
-
-          git commit -m "Auto version bump for updated .car files"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
 
