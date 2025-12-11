@@ -20,7 +20,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Required to compare with origin/main
+          fetch-depth: 0   # Full history needed for diff
 
       - name: Setup git
         run: |
@@ -29,47 +29,51 @@ jobs:
 
       - name: Version bump for all folders
         run: |
+          # Fetch last two commits to safely compare changes
+          git fetch origin main --depth=2
+
           folders=("CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities" "LMS")
 
           echo "Checking which folders have .car changes..."
 
           for folder in "${folders[@]}"; do
-            version_file="$folder/version.yaml"
-
             echo ""
             echo "---------------------------------------"
             echo "Processing folder: $folder"
             echo "---------------------------------------"
 
-            # Detect .car changes
-            changed_files=$(git diff --name-only origin/main HEAD -- "$folder"/*.car || true)
+            version_file="$folder/version.yaml"
+
+            # Detect .car changes in this folder
+            changed_files=$(git diff --name-only HEAD^ HEAD -- "$folder"/*.car || true)
 
             if [ -z "$changed_files" ]; then
               echo "No .car changes detected in $folder. Skipping."
               continue
             fi
 
-            echo "Detected changed .car files:"
+            echo "Changed .car files detected:"
             echo "$changed_files"
 
             # Create version.yaml if missing
             if [ ! -f "$version_file" ]; then
               echo "version: 1.0.0" > "$version_file"
-              echo "Created new version file for $folder with version 1.0.0"
+              echo "Created version.yaml for $folder"
             fi
 
             # Read current version
             current_version=$(grep 'version:' "$version_file" | awk '{print $2}')
             echo "Current version for $folder: $current_version"
 
-            # Split version
+            # Split version into major.minor.patch
             major=$(echo "$current_version" | cut -d. -f1)
             minor=$(echo "$current_version" | cut -d. -f2)
             patch=$(echo "$current_version" | cut -d. -f3)
 
-            # Increment version (patch first, rollover to minor)
+            # Increment patch
             patch=$((patch + 1))
 
+            # Roll over patch > 99 → increment minor
             if [ "$patch" -gt 99 ]; then
               patch=0
               minor=$((minor + 1))
