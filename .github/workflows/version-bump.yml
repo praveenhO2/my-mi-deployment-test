@@ -27,7 +27,7 @@ jobs:
           VERSION=$(grep 'version:' LMS/version.yaml | awk '{print $2}')
           echo "current_version=$VERSION" >> $GITHUB_ENV
 
-      # Step 3: Bump version
+      # Step 3: Bump version (PATCH first, minor/major rollover)
       - name: Bump version
         id: bump
         run: |
@@ -45,7 +45,7 @@ jobs:
           echo "version: $NEW_VERSION" > LMS/version.yaml
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
 
-      # Step 4: Commit & push updated version.yaml using PAT
+      # Step 4: Commit & Push updated version.yaml using PAT
       - name: Commit & Push new version
         run: |
           git config user.name "github-actions"
