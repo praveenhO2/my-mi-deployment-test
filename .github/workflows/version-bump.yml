@@ -2,29 +2,28 @@ name: Multi-Folder Version Bump
 
 on:
   push:
+    branches:
+      - main
     paths:
-      - 'CRM/*.car'
-      - 'ERS/*.car'
-      - 'Enterprise-Services/*.car'
-      - 'HR-Finance/*.car'
-      - 'Membership/*.car'
-      - 'Travel/*.car'
-      - 'Utilities/*.car'
-      - 'LMS/*.car'
+      - "**/*.car"
 
 jobs:
-  bump-version:
+  version-bump:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repo using PAT
-      - name: Checkout repo
+      - name: Checkout repository with PAT and full history
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0   # IMPORTANT: allows git diff to work
 
-      # Step 2: Detect changes and bump versions
-      - name: Bump versions
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Version bump for changed .car files
         run: |
           folders=("CRM" "ERS" "Enterprise-Services" "HR-Finance" "Membership" "Travel" "Utilities" "LMS")
 
@@ -32,13 +31,15 @@ jobs:
 
           for folder in "${folders[@]}"; do
             version_file="$folder/version.yaml"
+
             echo ""
             echo "---------------------------------------"
             echo "Processing folder: $folder"
             echo "---------------------------------------"
 
-            # Detect .car changes
-            changed_files=$(git diff --name-only origin/main HEAD -- "$folder"/*.car || true)
+            # Detect changed .car files (HEAD vs previous commit)
+            changed_files=$(git diff --name-only HEAD~1 HEAD -- "$folder"/*.car || true)
+
             if [ -z "$changed_files" ]; then
               echo "No .car changes detected in $folder. Skipping."
               continue
@@ -50,40 +51,44 @@ jobs:
             # Create version.yaml if missing
             if [ ! -f "$version_file" ]; then
               echo "version: 1.0.0" > "$version_file"
-              echo "Created new version file for $folder with version 1.0.0"
+              echo "Created new version file for $folder"
             fi
 
             # Read current version
             current_version=$(grep 'version:' "$version_file" | awk '{print $2}')
-            echo "Current version for $folder: $current_version"
+            echo "Current version: $current_version"
 
-            # Step 2a: Commit pre-bump folder state
-            git add "$folder"/*
-            git commit -m "$folder version: $current_version" || echo "Nothing to commit for pre-bump"
-
-            # Step 2b: Split version and increment patch
             major=$(echo "$current_version" | cut -d. -f1)
             minor=$(echo "$current_version" | cut -d. -f2)
             patch=$(echo "$current_version" | cut -d. -f3)
 
             patch=$((patch + 1))
+
             if [ "$patch" -gt 99 ]; then
               patch=0
               minor=$((minor + 1))
             fi
+
             new_version="${major}.${minor}.${patch}"
 
-            echo "Updating version to: $new_version"
+            echo "Updating version to $new_version"
             echo "version: $new_version" > "$version_file"
 
-            # Step 2c: Commit version bump
             git add "$version_file"
-            git commit -m "$folder version: $new_version" || echo "Nothing to commit for version bump"
+
           done
 
           echo ""
-          echo "Pushing all commits..."
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          echo "Checking if any version files changed..."
+
+          if git diff --cached --quiet; then
+            echo "No version changes to commit. Exiting."
+            exit 0
+          fi
+
+          git commit -m "Auto version bump for updated .car files"
+
+      - name: Push changes using PAT
+        run: |
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
 
