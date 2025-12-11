@@ -1,0 +1,235 @@
+import groovy.json.JsonSlurper
+
+pipeline {
+    agent any
+    
+    triggers {
+        pollSCM('H/5 * * * *') 
+    }
+
+    parameters {
+        string(name: 'TARGET_DIRECTORY', defaultValue: 'Travel', description: 'The directory to watch (Group1 or Group2)')
+    }
+
+    environment {
+        REPO_OWNER = 'ACAIntegration'
+        REPO_NAME  = 'DEMO-WSO2-MI-DEPLOYMENT-CICD'
+    }
+
+    stages {
+        stage('Setup and Check Changes') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'aaa_git_credential', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    script {
+                        // 1. Construct the Authenticated URL
+                        // This embeds the credentials directly into the URL for this session
+                        def authUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/${REPO_OWNER}/${REPO_NAME}.git"
+
+                        // 2. Fetch tags using the AUTH URL to ensure we have the latest history
+                        // This fixes the "No such device" error during fetch
+                        sh "git fetch ${authUrl} --tags --force"
+
+                        // 3. Check for changes
+                        echo "Checking for changes in ${params.TARGET_DIRECTORY}..."
+                        def changedFiles = sh(script: "git diff --name-only HEAD^ HEAD", returnStdout: true).trim()
+                        
+                        if (changedFiles.contains(params.TARGET_DIRECTORY)) {
+                            echo "Changes detected in ${params.TARGET_DIRECTORY}."
+                            env.SHOULD_BUILD = "true"
+                        } else {
+                            echo "No changes. Skipping."
+                            env.SHOULD_BUILD = "false"
+                            currentBuild.result = 'SUCCESS'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Calculate Version & Tag') {
+            when { environment name: 'SHOULD_BUILD', value: 'true' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'aaa_git_credential', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    script {
+                        def groupName = params.TARGET_DIRECTORY.toLowerCase()
+                        def authUrl = "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/${REPO_OWNER}/${REPO_NAME}.git"
+                        
+                        // 1. Find the latest tag for this group
+                        // We filter for tags like 'Group1-v1.0.0', 'Group1-v1.0.1', etc.
+                        def lastTag = sh(script: """
+                            git tag -l "${groupName}-v*" | sort -V | tail -n 1
+                        """, returnStdout: true).trim()
+
+                        // Default values (Start at 1.0.0 if no tag exists)
+                        int major = 1
+                        int minor = 0
+                        int patch = 0
+
+                        if (lastTag) {
+                            echo "Found latest existing tag: ${lastTag}"
+                            try {
+                                // Extract the version part. 
+                                // Example: 'Group1-v1.0.99' -> '1.0.99'
+                                def versionString = lastTag.split("${groupName}-v")[1] 
+                                
+                                // Split into X, Y, Z
+                                def parts = versionString.split("\\.")
+                                major = parts[0].toInteger()
+                                minor = parts[1].toInteger()
+                                patch = parts[2].toInteger()
+
+                                // Increment Logic
+                                patch = patch + 1
+
+                                // Check for rollover: 100 patches -> 1 minor
+                                if (patch >= 100) {
+                                    patch = 0
+                                    minor = minor + 1
+                                }
+
+                                // Check for rollover: 100 minors -> 1 major
+                                if (minor >= 100) {
+                                    minor = 0
+                                    major = major + 1
+                                }
+
+                            } catch (Exception e) {
+                                echo "Error parsing previous version (${lastTag}). Resetting to v1.0.0"
+                                major = 1; minor = 0; patch = 0
+                            }
+                        } else {
+                            echo "No existing tags found for ${groupName}. Starting at v1.0.0."
+                        }
+
+                        // Construct new version string
+                        def versionStr = "${major}.${minor}.${patch}"
+                        
+                        env.NEW_TAG = "${groupName}-v${versionStr}"
+                        // Ensure extension is correct based on your choice (zip or tar.gz)
+                        env.PKG_FILENAME = "${groupName}-v${versionStr}.tar.gz"
+                        
+                        echo "Calculated next version: ${env.NEW_TAG}"
+
+                        // 2. Push the new tag
+                        sh """
+                            git tag -a ${env.NEW_TAG} -m "Jenkins Release ${env.NEW_TAG}"
+                            git push ${authUrl} ${env.NEW_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Zip Package') {
+            when { environment name: 'SHOULD_BUILD', value: 'true' }
+            steps {
+                script {
+                    sh "tar -czf ${env.PKG_FILENAME} ${params.TARGET_DIRECTORY}"
+                }
+            }
+        }
+
+        stage('Upload to GitHub Releases') {
+            when { environment name: 'SHOULD_BUILD', value: 'true' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'aaa_git_credential', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    script {
+                        echo "--- STARTING UPLOAD DEBUGGING ---"
+        
+                        // 1. Create Metadata
+                        def createReleasePayload = """
+                        {
+                            "tag_name": "${env.NEW_TAG}",
+                            "name": "${env.NEW_TAG}",
+                            "body": "Auto-generated release for ${params.TARGET_DIRECTORY}",
+                            "draft": false,
+                            "prerelease": false
+                        }
+                        """
+                        writeFile file: 'release.json', text: createReleasePayload
+        
+                        // 2. Create Release
+                        echo "DEBUG: Creating release on GitHub..."
+                        def response = sh(script: """
+                            curl -s -v -X POST \
+                            -H "Authorization: token ${GIT_PASSWORD}" \
+                            -H "Accept: application/vnd.github.v3+json" \
+                            -d @release.json \
+                            https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases
+                        """, returnStdout: true).trim()
+        
+                        // 3. Parse Response
+                        def jsonSlurper = new JsonSlurper()
+                        def releaseData = null
+                        try {
+                            releaseData = jsonSlurper.parseText(response)
+                        } catch (Exception e) {
+                            echo "ERROR: Could not parse JSON. Raw response: \n${response}"
+                            error("JSON Parsing failed")
+                        }
+        
+                        if (!releaseData.upload_url) {
+                            echo "ERROR: No upload_url found. Release creation might have failed."
+                            echo "FULL RESPONSE: ${response}"
+                            error("Stopping pipeline due to missing upload URL.")
+                        }
+        
+                        // 4. Clean URL
+                        String rawUrl = releaseData.upload_url
+                        // GitHub returns: https://uploads.github.com/repos/hub/repo/releases/123/assets{?name,label}
+                        // We must split at '{'
+                        String cleanUploadUrl = rawUrl.split('\\{')[0].trim()
+                        echo "DEBUG: Clean Upload URL is: '${cleanUploadUrl}'"
+        
+                        // 5. Verify File Integrity
+                        def absFilePath = "${env.WORKSPACE}/${env.PKG_FILENAME}"
+                        echo "DEBUG: Checking file at path: ${absFilePath}"
+                        
+                        // TROUBLESHOOTING TIP: List file size and permissions
+                        // If size is 0, the tar command failed silently earlier
+                        def fileExists = sh(script: "[ -f '${absFilePath}' ] && echo 'yes' || echo 'no'", returnStdout: true).trim()
+                        
+                        if (fileExists == 'no') {
+                            error("ERROR: File ${absFilePath} does not exist! Check the 'Package' stage.")
+                        }
+                        
+                        sh "ls -lh ${absFilePath}" 
+        
+                        // 6. Perform Upload with Verbose Logging
+                        echo "DEBUG: Starting Upload..."
+                        
+                        // TROUBLESHOOTING CHANGES:
+                        // 1. Removed '--fail' so we can see the error body if it fails.
+                        // 2. Added '-v' to see the handshake/headers in the Jenkins log.
+                        // 3. Added '-o upload_response.txt' to capture what GitHub replies (e.g. "Validation Failed").
+                        // 4. Added '-w' to print the HTTP status code at the end.
+                        
+                        def httpCode = sh(script: """
+                            curl -v -L -X POST \
+                            -H "Authorization: token ${GIT_PASSWORD}" \
+                            -H "Content-Type: application/gzip" \
+                            --data-binary "@${absFilePath}" \
+                            -o upload_response.txt \
+                            -w "%{http_code}" \
+                            "${cleanUploadUrl}?name=${env.PKG_FILENAME}"
+                        """, returnStdout: true).trim()
+        
+                        // 7. Print the Server Response
+                        echo "--- UPLOAD FINISHED ---"
+                        echo "HTTP Status Code: ${httpCode}"
+                        
+                        def uploadResponseBody = readFile('upload_response.txt')
+                        echo "GitHub API Response Body: \n${uploadResponseBody}"
+        
+                        // 8. Manually fail if status is not 201 (Created)
+                        if (httpCode != '201') {
+                            error("Upload failed with HTTP ${httpCode}. See response above for details.")
+                        } else {
+                            echo "SUCCESS: Asset uploaded successfully."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

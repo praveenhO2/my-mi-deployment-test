@@ -1,0 +1,6 @@
+com.aaacorp LMSLeadIngestionAPI 1.0.0
+com.aaacorp LMSLeadIngestionEventProcessor 1.0.0
+com.microintegrator.projects LMSPilotEventProcessor 1.0.0
+com.aaacorp LMSaveQuoteAPI 1.0.1
+com.aaacorp LMSSaveQuoteEventProcessor 1.0.0
+com.microintegrator.projects epic-event-processing 1.0.0
