@@ -1,56 +1,89 @@
-properties([
-    // Poll repo every 2 minutes (safe + lightweight)
-    pipelineTriggers([pollSCM('H/2 * * * *')]),
-
-    // Avoid parallel overlapping builds
-    disableConcurrentBuilds(),
-
-    // Ignore commits created by the workflow itself
-    [
-        $class: 'ScmFilterByCommitMessage',
-        regex: '^(?!.*Auto version bump).*'
-    ]
-])
-
-// =========================================================
-//  MAIN PIPELINE
-// =========================================================
 pipeline {
     agent any
 
-    environment {
-        // local folder where CARs must be copied
-        TARGET_DIR = "/Users/praveenh/scripts/mnt/filestore/mi/capps"
+    options {
+        disableConcurrentBuilds()
+        // Keep build history manageable
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    triggers {
+        // Poll SCM every 2 minutes (adjust as needed)
+        pollSCM('* * * * *')
     }
 
     stages {
 
-        // -------------------------
         stage('Checkout') {
             steps {
-                echo "Checking out repository..."
-                checkout scm
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/praveenhO2/my-mi-deployment-test',
+                        credentialsId: 'github-pat'
+                    ]]
+                ])
             }
         }
-        // -------------------------
 
-        stage('Version Bump') {
+        stage('Check Changes') {
             steps {
-                echo "Running version bump script..."
-                sh "bash scripts/version-bump.sh"
+                script {
+                    // Get last commit message
+                    def lastCommitMsg = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+
+                    // Skip auto version bump commits
+                    if (lastCommitMsg.contains("Auto version bump")) {
+                        echo "Skipping build for auto version bump commit"
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    }
+
+                    // Check if folder/version.yaml changed
+                    def changedFiles = sh(
+                        script: "git diff-tree --no-commit-id --name-only -r HEAD",
+                        returnStdout: true
+                    ).trim().split("\n")
+
+                    if (!changedFiles.any { it == 'folder/version.yaml' }) {
+                        echo "No changes in folder/version.yaml, skipping deployment"
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    }
+
+                    echo "Detected change in folder/version.yaml, proceeding with build"
+                }
             }
         }
 
-        // -------------------------
-
-        stage('Deploy CAR Files') {
+        stage('Deploy .car') {
             steps {
-                echo "Deploying .car files..."
-                sh "bash scripts/deploy-car-files.sh ${env.TARGET_DIR}"
+                script {
+                    // Example deployment step - replace with your real commands
+                    echo "Deploying .car file..."
+                    sh 'ls -l folder/*.car'  // List the .car files
+                    // Add your deployment command here
+                }
             }
         }
+    }
 
-        // -------------------------
+    post {
+        always {
+            echo "Pipeline finished with status: ${currentBuild.currentResult}"
+        }
+        failure {
+            echo "Build failed!"
+        }
+        success {
+            echo "Build succeeded!"
+        }
     }
 }
 
