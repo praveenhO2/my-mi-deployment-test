@@ -1,0 +1,31 @@
+pipeline {
+    agent any
+
+    environment {
+        LOCAL_DEPLOY_DIR = "/Users/praveenh/scripts/mnt/filestore/mi/capps" // your local target directory
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout the repository
+                git branch: 'main', url: 'https://github.com/praveenhO2/my-mi-deployment-test.git'
+            }
+        }
+
+        stage('Version Bump') {
+            steps {
+                echo "Running version bump script..."
+                sh 'bash scripts/version-bump.sh'
+            }
+        }
+
+        stage('Deploy .car Files') {
+            steps {
+                echo "Deploying .car files..."
+                sh "bash scripts/deploy-car-files.sh $LOCAL_DEPLOY_DIR"
+            }
+        }
+    }
+}
+
