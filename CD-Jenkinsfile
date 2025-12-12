@@ -1,31 +1,56 @@
+properties([
+    // Poll repo every 2 minutes (safe + lightweight)
+    pipelineTriggers([pollSCM('H/2 * * * *')]),
+
+    // Avoid parallel overlapping builds
+    disableConcurrentBuilds(),
+
+    // Ignore commits created by the workflow itself
+    [
+        $class: 'ScmFilterByCommitMessage',
+        regex: '^(?!.*Auto version bump).*'
+    ]
+])
+
+// =========================================================
+//  MAIN PIPELINE
+// =========================================================
 pipeline {
     agent any
 
     environment {
-        LOCAL_DEPLOY_DIR = "/Users/praveenh/scripts/mnt/filestore/mi/capps" // your local target directory
+        // local folder where CARs must be copied
+        TARGET_DIR = "/Users/praveenh/scripts/mnt/filestore/mi/capps"
     }
 
     stages {
+
+        // -------------------------
         stage('Checkout') {
             steps {
-                // Checkout the repository
-                git branch: 'main', url: 'https://github.com/praveenhO2/my-mi-deployment-test.git'
+                echo "Checking out repository..."
+                checkout scm
             }
         }
+        // -------------------------
 
         stage('Version Bump') {
             steps {
                 echo "Running version bump script..."
-                sh 'bash scripts/version-bump.sh'
+                sh "bash scripts/version-bump.sh"
             }
         }
 
-        stage('Deploy .car Files') {
+        // -------------------------
+
+        stage('Deploy CAR Files') {
             steps {
                 echo "Deploying .car files..."
-                sh "bash scripts/deploy-car-files.sh $LOCAL_DEPLOY_DIR"
+                sh "bash scripts/deploy-car-files.sh ${env.TARGET_DIR}"
             }
         }
+
+        // -------------------------
     }
 }
 
